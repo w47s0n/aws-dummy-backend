@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 const mariadb = require('mariadb');
-const AWS = require('aws-sdk');
+const { RDS } = require('@aws-sdk/client-rds');
 
 const app = express();
 app.use(cors());
@@ -13,7 +13,7 @@ const dbConfig = {
   host: process.env.DB_HOST,
   user: process.env.DB_USER, // IAM role name or specific DB user enabled for IAM auth
   database: process.env.DB_NAME,
-  port: process.env.DB_PORT || 3306,
+  port: parseInt(process.env.DB_PORT, 10) || 3306,
   connectionLimit: 5,
   // ssl: { // uncomment and configure if SSL connection is required/enforced
   //   rejectUnauthorized: true,
@@ -23,31 +23,29 @@ const dbConfig = {
 
 // Function to get IAM database auth token
 async function getAuthToken() {
-  const signer = new AWS.RDS.Signer({
+  const rdsClient = new RDS({
     region: process.env.AWS_REGION, // Ensure AWS_REGION is set in your environment
-    hostname: dbConfig.host,
-    port: dbConfig.port,
-    username: dbConfig.user,
   });
-
-  // AWS SDK will automatically use credentials from the EC2 instance profile
-  return new Promise((resolve, reject) => {
-    signer.getAuthToken({}, (err, token) => {
-      if (err) {
-        // Check for permission-related errors
-        if (err.code === 'CredentialsError' || 
-            err.code === 'AccessDenied' || 
-            err.message.includes('credentials') || 
-            err.message.includes('permission') ||
-            err.message.includes('access denied')) {
-          console.error("PERMISSION DENIED: EC2 instance doesn't have appropriate IAM role for RDS access", err);
-          return reject(new Error("Permission denied: EC2 instance doesn't have appropriate IAM role for RDS access"));
-        }
-        return reject(err);
-      }
-      resolve(token);
+  
+  try {
+    const token = await rdsClient.generateAuthenticationToken({
+      hostname: dbConfig.host,
+      port: dbConfig.port,
+      username: dbConfig.user,
     });
-  });
+    
+    return token;
+  } catch (err) {
+    if (err.name === 'CredentialsProviderError' || 
+        err.name === 'AccessDenied' || 
+        err.message.includes('credentials') || 
+        err.message.includes('permission') ||
+        err.message.includes('access denied')) {
+      console.error("PERMISSION DENIED: EC2 instance doesn't have appropriate IAM role for RDS access", err);
+      throw new Error("Permission denied: EC2 instance doesn't have appropriate IAM role for RDS access");
+    }
+    throw err;
+  }
 }
 
 // Create a function to get a database connection with a fresh auth token
