@@ -24,6 +24,22 @@ const dbConfig = {
 // Function to get IAM database auth token
 async function getAuthToken() {
   try {
+    // Debug info
+    console.log("AWS Region:", process.env.AWS_REGION);
+    console.log("DB Host:", dbConfig.host);
+    console.log("DB Port:", dbConfig.port);
+    console.log("DB User:", dbConfig.user);
+    
+    // Try to get current AWS identity
+    const { STSClient, GetCallerIdentityCommand } = require("@aws-sdk/client-sts");
+    const stsClient = new STSClient({ region: process.env.AWS_REGION });
+    try {
+      const identityData = await stsClient.send(new GetCallerIdentityCommand({}));
+      console.log("Current AWS Identity:", JSON.stringify(identityData));
+    } catch (stsErr) {
+      console.error("Failed to get AWS identity:", stsErr);
+    }
+    
     // Create a Signer instance with the correct package
     const signer = new Signer({
       region: process.env.AWS_REGION,
@@ -33,8 +49,12 @@ async function getAuthToken() {
     });
     
     // Get the auth token
-    return await signer.getAuthToken();
+    console.log("Requesting auth token...");
+    const token = await signer.getAuthToken();
+    console.log("Auth token obtained successfully (token not printed for security)");
+    return token;
   } catch (err) {
+    console.error("Auth token error details:", JSON.stringify(err, null, 2));
     // Check for permission-related errors
     if (err.name === 'CredentialsProviderError' || 
         err.name === 'AccessDenied' || 
@@ -48,18 +68,57 @@ async function getAuthToken() {
   }
 }
 
+// Test function to try standard auth if IAM auth fails
+async function tryStandardAuth() {
+  if (!process.env.DB_PASSWORD) {
+    console.log("DB_PASSWORD not set, skipping standard auth test");
+    return;
+  }
+  
+  console.log("Attempting standard auth as fallback test...");
+  try {
+    const conn = await mariadb.createConnection({
+      host: dbConfig.host,
+      user: dbConfig.user,
+      password: process.env.DB_PASSWORD,
+      database: dbConfig.database,
+      port: dbConfig.port
+    });
+    
+    await conn.query("SELECT 1 as test");
+    console.log("STANDARD AUTH SUCCEEDED - this confirms the database exists and is reachable");
+    conn.end();
+  } catch (err) {
+    console.error("STANDARD AUTH FAILED:", err);
+    console.log("This suggests either network/security group issues or incorrect credentials");
+  }
+}
+
 // Create a function to get a database connection with a fresh auth token
 async function getConnection() {
   try {
+    // First check if IAM auth is enabled
+    console.log("Checking for IAM auth...");
+    
     // Get a fresh auth token
     const token = await getAuthToken();
+    console.log("Creating connection with token...");
     
     // Create a connection with the token as password
-    return await mariadb.createConnection({
+    const conn = await mariadb.createConnection({
       ...dbConfig,
       password: token,
+      connectTimeout: 10000, // Increase timeout for debugging
     });
+    
+    console.log("IAM AUTH CONNECTION SUCCESSFUL!");
+    return conn;
   } catch (err) {
+    console.error("Detailed connection error:", JSON.stringify(err, null, 2));
+    
+    // Try standard auth as a diagnostic step
+    await tryStandardAuth();
+    
     // Check if this is an auth token error (likely permissions)
     if (err.message && err.message.includes("Permission denied")) {
       console.error("Database connection failed:", err.message);
@@ -110,6 +169,7 @@ function releaseConnection(conn) {
 }
 
 // Test DB connection on startup
+console.log("=============== STARTING DATABASE CONNECTION TEST ===============");
 getConnection()
   .then(conn => {
     console.log("Successfully connected to the database.");
@@ -119,6 +179,9 @@ getConnection()
     console.error("Error connecting to database:", err);
     // Potentially exit the application if DB connection is critical
     // process.exit(1);
+  })
+  .finally(() => {
+    console.log("=============== DATABASE CONNECTION TEST COMPLETE ===============");
   });
 
 // --- Removed hardcoded students array ---
