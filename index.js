@@ -168,12 +168,66 @@ function releaseConnection(conn) {
   }
 }
 
-// Test DB connection on startup
+// Function to initialize database tables and sample data
+async function initializeDatabase() {
+  let conn;
+  try {
+    console.log("Initializing database...");
+    conn = await getConnection();
+    
+    // Check if students table exists
+    const tables = await conn.query(`
+      SELECT table_name 
+      FROM information_schema.tables 
+      WHERE table_schema = ? 
+      AND table_name = 'students'
+    `, [dbConfig.database]);
+    
+    // Create students table if it doesn't exist
+    if (tables.length === 0) {
+      console.log("Creating students table...");
+      await conn.query(`
+        CREATE TABLE students (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          name VARCHAR(100) NOT NULL,
+          email VARCHAR(100) NOT NULL UNIQUE
+        )
+      `);
+      
+      // Insert sample data
+      console.log("Inserting sample data...");
+      await conn.query(`
+        INSERT INTO students (name, email) VALUES 
+        ('John Doe', 'john@example.com'),
+        ('Jane Smith', 'jane@example.com'),
+        ('Bob Johnson', 'bob@example.com'),
+        ('Alice Williams', 'alice@example.com'),
+        ('Charlie Brown', 'charlie@example.com')
+      `);
+      
+      console.log("Database initialization completed successfully.");
+    } else {
+      console.log("Students table already exists, skipping initialization.");
+    }
+  } catch (err) {
+    console.error("Database initialization failed:", err);
+    throw err;
+  } finally {
+    if (conn) {
+      try { conn.end(); } catch (e) { /* ignore close error */ }
+    }
+  }
+}
+
+// Test DB connection on startup and initialize database
 console.log("=============== STARTING DATABASE CONNECTION TEST ===============");
 getConnection()
-  .then(conn => {
+  .then(async conn => {
     console.log("Successfully connected to the database.");
     try { conn.end(); } catch (e) { /* ignore close error */ }
+    
+    // After successful connection, initialize database
+    return initializeDatabase();
   })
   .catch(err => {
     console.error("Error connecting to database:", err);
