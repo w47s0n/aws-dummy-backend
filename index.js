@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 const mariadb = require('mariadb');
-const { RDS } = require('@aws-sdk/client-rds');
+const { Signer } = require('@aws-sdk/rds-signer');
 
 const app = express();
 app.use(cors());
@@ -23,19 +23,19 @@ const dbConfig = {
 
 // Function to get IAM database auth token
 async function getAuthToken() {
-  const rdsClient = new RDS({
-    region: process.env.AWS_REGION, // Ensure AWS_REGION is set in your environment
-  });
-  
   try {
-    const token = await rdsClient.generateAuthenticationToken({
+    // Create a Signer instance with the correct package
+    const signer = new Signer({
+      region: process.env.AWS_REGION,
       hostname: dbConfig.host,
       port: dbConfig.port,
       username: dbConfig.user,
     });
     
-    return token;
+    // Get the auth token
+    return await signer.getAuthToken();
   } catch (err) {
+    // Check for permission-related errors
     if (err.name === 'CredentialsProviderError' || 
         err.name === 'AccessDenied' || 
         err.message.includes('credentials') || 
